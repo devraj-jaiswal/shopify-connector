@@ -60,6 +60,11 @@ class Exporter extends AbstractExporter
 
     protected $imageData = [];
 
+    /**
+     * Cached count of root products in this export, used to pick the core path.
+     */
+    protected ?int $totalExportRootCount = null;
+
     public const BATCH_SIZE = 500;
 
     /**
@@ -275,11 +280,43 @@ class Exporter extends AbstractExporter
     }
 
     /**
-     * Use the bulk operation path as the primary core export flow.
+     * Decide between the bulk and sequential core export paths.
      */
     protected function shouldUseBulkCorePath(): bool
     {
-        return true;
+        $threshold = (int) config('shopify-bulk-operations.bulk_threshold', 10);
+
+        if ($threshold <= 0) {
+            return true;
+        }
+
+        return $this->getTotalExportRootCount() >= $threshold;
+    }
+
+    protected function getTotalExportRootCount(): int
+    {
+        if ($this->totalExportRootCount !== null) {
+            return $this->totalExportRootCount;
+        }
+
+        $filters = $this->getFilters();
+
+        $query = DB::table('products')
+            ->where(function ($q) {
+                $q->whereNull('parent_id')->orWhere('parent_id', 0);
+            });
+
+        if (! empty($filters['productfilter'])) {
+            $rootSkus = $this->resolveFilterSkusToRoots($filters['productfilter']);
+
+            if (empty($rootSkus)) {
+                return $this->totalExportRootCount = 0;
+            }
+
+            $query->whereIn('sku', $rootSkus);
+        }
+
+        return $this->totalExportRootCount = $query->count();
     }
 
     /**
